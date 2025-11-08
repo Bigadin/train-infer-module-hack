@@ -4,7 +4,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, APIRouter
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
@@ -26,6 +26,9 @@ app.add_middleware(
 
 mgr = InferenceManager(base_dir=DATA_DIR)
 
+# Provide an "/api"-prefixed router so calls to :8001/api/* also work
+api = APIRouter()
+
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -36,6 +39,7 @@ def index():
 
 
 @app.post("/infer")
+@api.post("/infer")
 async def infer(
     background_tasks: BackgroundTasks,
     model_type: str = Form(..., description="yolo|detr"),
@@ -69,6 +73,7 @@ async def infer(
 
 
 @app.get("/status/{job_id}")
+@api.get("/status/{job_id}")
 def status(job_id: str):
     job = mgr.get(job_id)
     if not job:
@@ -77,6 +82,7 @@ def status(job_id: str):
 
 
 @app.get("/logs/{job_id}", response_class=PlainTextResponse)
+@api.get("/logs/{job_id}", response_class=PlainTextResponse)
 def logs(job_id: str, tail: int = 2000):
     path = mgr.get_job_log(job_id)
     if not path.exists():
@@ -88,6 +94,7 @@ def logs(job_id: str, tail: int = 2000):
 
 
 @app.get("/result/{job_id}")
+@api.get("/result/{job_id}")
 def result(job_id: str):
     info = mgr.get(job_id)
     if not info:
@@ -101,6 +108,7 @@ def result(job_id: str):
 
 
 @app.get("/rt/{job_id}/frame.jpg")
+@api.get("/rt/{job_id}/frame.jpg")
 def rt_latest_frame(job_id: str):
     p = mgr.latest_realtime_frame(job_id)
     if not p:
@@ -109,6 +117,7 @@ def rt_latest_frame(job_id: str):
 
 
 @app.get("/rt/{job_id}/frames")
+@api.get("/rt/{job_id}/frames")
 def rt_list(job_id: str, limit: int = 50):
     files = mgr.realtime_frames(job_id, limit=limit)
     return {"frames": [f"/rt/{job_id}/frame.jpg?t={int(Path(f).stat().st_mtime)}" for f in files]}
@@ -119,3 +128,5 @@ static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# Mount the API router under /api as well
+app.include_router(api, prefix="/api")
