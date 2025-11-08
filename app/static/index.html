@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Entraînement YOLO / DETR</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --card: #121a33;
+      --accent: #5b8cff;
+      --text: #e9edf7;
+      --muted: #9fb0d0;
+      --success: #1db954;
+      --warn: #ffb547;
+    }
+    * { box-sizing: border-box; }
+    body { background: var(--bg); font-family: Inter, system-ui, Arial, sans-serif; margin: 0; color: var(--text); }
+    header { background: linear-gradient(90deg, #0f1a3a, #142a6b); padding: 18px 24px; }
+    header h1 { margin: 0; font-size: 20px; letter-spacing: 0.5px; }
+    main { padding: 24px; max-width: 960px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { background: var(--card); border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; padding: 16px; }
+    .row { margin-bottom: 12px; display: flex; align-items: center; gap: 12px; }
+    label { width: 180px; color: var(--muted); font-size: 14px; }
+    input, select { padding: 8px 10px; width: 100%; background: #0e1530; border: 1px solid #26345f; border-radius: 8px; color: var(--text); }
+    input::file-selector-button { background: #223061; color: var(--text); border: none; padding: 6px 10px; border-radius: 6px; margin-right: 10px; cursor: pointer; }
+    .btn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: white; border: none; border-radius: 8px; padding: 10px 14px; cursor: pointer; font-weight: 600; }
+    .btn.secondary { background: #223061; color: var(--text); }
+    .status { margin-top: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .pill { padding: 4px 10px; border-radius: 999px; background: #223061; font-size: 12px; color: var(--muted); }
+    pre { background: #0a0f25; color: #c6f7d0; padding: 12px; height: 280px; overflow: auto; border-radius: 10px; border: 1px solid #1a2a55; }
+    .progress { height: 10px; background: #0e1530; border: 1px solid #26345f; border-radius: 999px; overflow: hidden; }
+    .bar { height: 100%; background: linear-gradient(90deg, #4fb0ff, #5b8cff); width: 0%; transition: width .3s ease; }
+    a.btn { text-decoration: none; }
+    small { color: var(--muted); }
+  </style>
+  <script>
+    let currentJob = null;
+    let pollHandle = null;
+    let apiBase = '';
+    let artifactsLoaded = false;
+
+    function computeApiBase() {
+      // Default to relative /api (works via nginx reverse proxy)
+      apiBase = '/api';
+      const manual = document.getElementById('apiBase');
+      if (manual && manual.value.trim()) {
+        apiBase = manual.value.trim().replace(/\/$/, '');
+      } else if (manual) {
+        manual.value = apiBase;
+      }
+      document.getElementById('apiBaseEcho').textContent = apiBase;
+    }
+
+    async function startTrain(ev) {
+      ev.preventDefault();
+      const form = document.getElementById('trainForm');
+      const data = new FormData(form);
+
+      // Avoid sending both if both are empty
+      if (!data.get('dataset') && !data.get('dataset_url')) {
+        alert('Veuillez fournir un dataset (upload) ou une URL.');
+        return;
+      }
+
+      computeApiBase();
+      const resp = await fetch(apiBase + '/train', { method: 'POST', body: data });
+      if (!resp.ok) {
+        const t = await resp.text();
+        alert('Erreur: ' + t);
+        return;
+      }
+      const j = await resp.json();
+      currentJob = j.job_id;
+      document.getElementById('job').textContent = currentJob;
+      document.getElementById('status').textContent = 'created';
+      document.getElementById('progress').textContent = '0%';
+      document.getElementById('download').style.display = 'none';
+      poll();
+      if (pollHandle) clearInterval(pollHandle);
+      pollHandle = setInterval(poll, 2000);
+    }
+
+    async function poll() {
+      if (!currentJob) return;
+      computeApiBase();
+      const s = await fetch(apiBase + '/status/' + currentJob);
+      if (s.ok) {
+        const js = await s.json();
+        document.getElementById('status').textContent = js.status;
+        document.getElementById('progress').textContent = js.progress + '%';
+        document.getElementById('bar').style.width = (js.progress||0) + '%';
+        document.getElementById('message').textContent = js.message || '';
+        if (js.weights_ready) {
+          document.getElementById('download').style.display = 'inline-block';
+          document.getElementById('download').href = apiBase + '/download/' + currentJob;
+          if (!artifactsLoaded) {
+            artifactsLoaded = true;
+            loadArtifactsAndMetrics();
+          }
+        }
+      }
+      const l = await fetch(apiBase + '/logs/' + currentJob + '?tail=5000');
+      if (l.ok) {
+        const txt = await l.text();
+        document.getElementById('logs').textContent = txt;
+        const pre = document.getElementById('logs');
+        pre.scrollTop = pre.scrollHeight;
+      }
+    }
+
+    async function loadArtifactsAndMetrics() {
+      try {
+        const [aRes, mRes] = await Promise.all([
+          fetch(apiBase + '/artifacts/' + currentJob),
+          fetch(apiBase + '/metrics/' + currentJob)
+        ]);
+        if (aRes.ok) {
+          const a = await aRes.json();
+          const images = a.images || [];
+          const csvs = a.csvs || [];
+          const imgGrid = document.getElementById('images');
+          imgGrid.innerHTML = '';
+          images.forEach(u => {
+            const img = document.createElement('img');
+            img.src = apiBase + new URL(u, location.origin).pathname + new URL(u, location.origin).search;
+            img.style.maxWidth = '100%';
+            img.style.borderRadius = '8px';
+            img.style.border = '1px solid #1a2a55';
+            img.style.background = '#0a0f25';
+            const wrap = document.createElement('div');
+            wrap.appendChild(img);
+            imgGrid.appendChild(wrap);
+          });
+          const csvList = document.getElementById('csvs');
+          csvList.innerHTML = '';
+          csvs.forEach(u => {
+            const a = document.createElement('a');
+            a.href = apiBase + new URL(u, location.origin).pathname + new URL(u, location.origin).search;
+            a.textContent = u.split('?file=').pop();
+            a.target = '_blank';
+            a.className = 'btn secondary';
+            csvList.appendChild(a);
+          });
+          document.getElementById('metricsCard').style.display = 'block';
+        }
+        if (mRes.ok) {
+          const m = await mRes.json();
+          const metricBox = document.getElementById('metrics');
+          metricBox.innerHTML = '';
+          if (m.found) {
+            const entries = Object.entries(m.metrics);
+            entries.forEach(([k,v]) => {
+              const row = document.createElement('div');
+              row.className = 'row';
+              const lab = document.createElement('label');
+              lab.textContent = k;
+              const val = document.createElement('div');
+              val.textContent = v;
+              row.appendChild(lab);
+              row.appendChild(val);
+              metricBox.appendChild(row);
+            });
+          } else {
+            metricBox.textContent = 'Aucune métrique trouvée.';
+          }
+        }
+      } catch (e) {
+        console.error('metrics/artifacts load error', e);
+      }
+    }
+  </script>
+  </head>
+<body>
+  <header>
+    <h1>Trainer YOLO / DETR</h1>
+  </header>
+  <main>
+    <div class="grid">
+      <div class="card">
+        <form id="trainForm" onsubmit="startTrain(event)">
+          <div class="row">
+            <label>API Base URL</label>
+            <input type="text" id="apiBase" placeholder="/api" oninput="computeApiBase()" />
+          </div>
+          <small>Utilisé: <code id="apiBaseEcho"></code></small>
+          <div class="row" style="margin-top:10px;">
+            <label>Type de modèle</label>
+            <select name="model_type" required>
+              <option value="yolo">YOLO (small)</option>
+              <option value="detr">DETR (Base)</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>Dataset (zip)</label>
+            <input type="file" name="dataset" accept=".zip" />
+          </div>
+          <div class="row">
+            <label>OU Dataset URL (zip)</label>
+            <input type="url" name="dataset_url" placeholder="https://.../dataset.zip" />
+          </div>
+          <div class="row"><label>Epochs</label><input type="number" name="epochs" value="20"></div>
+          <div class="row"><label>Batch size</label><input type="number" name="batch_size" value="4"></div>
+          <div class="row"><label>LR</label><input type="number" name="lr" step="0.000001" value="0.0001"></div>
+          <div class="row"><label>Grad Accum Steps</label><input type="number" name="grad_accum_steps" value="1"></div>
+          <div class="row"><label>Image size (YOLO)</label><input type="number" name="img_size" value="640"></div>
+          <div class="row"><button class="btn" type="submit">Lancer l'entraînement</button></div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="status">
+          <span class="pill">Job: <code id="job">-</code></span>
+          <span class="pill">Statut: <strong id="status">-</strong></span>
+          <span class="pill">Progression: <strong id="progress">0%</strong></span>
+          <a id="download" href="#" style="display:none" class="btn secondary">Télécharger les poids</a>
+        </div>
+        <div class="progress" style="margin:12px 0;">
+          <div class="bar" id="bar" style="width:0%"></div>
+        </div>
+        <div class="row"><label>Message</label><div id="message">-</div></div>
+        <h3 style="margin-top:0;">Logs</h3>
+        <pre id="logs"></pre>
+      </div>
+    </div>
+    <div class="card" id="metricsCard" style="display:none; margin-top:16px;">
+      <h3 style="margin-top:0;">Métriques & Graphiques</h3>
+      <div id="metrics"></div>
+      <div class="row" id="csvs" style="gap:8px; flex-wrap: wrap;"></div>
+      <div id="images" style="display:grid; grid-template-columns: repeat(2, 1fr); gap:12px; margin-top:12px;"></div>
+    </div>
+  </main>
+  <script>
+    // Initialize api base echo on load
+    computeApiBase();
+  </script>
+</body>
+</html>

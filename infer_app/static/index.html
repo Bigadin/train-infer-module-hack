@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inference YOLO / DETR</title>
+  <style>
+    :root { --bg:#0b1020; --card:#121a33; --accent:#5b8cff; --text:#e9edf7; --muted:#9fb0d0; }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,Arial}
+    header{background:linear-gradient(90deg,#0f1a3a,#142a6b);padding:18px 24px}
+    main{padding:24px;max-width:960px;margin:0 auto}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .card{background:var(--card);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:16px}
+    .row{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+    label{width:180px;color:var(--muted);font-size:14px}
+    input,select{width:100%;padding:8px 10px;background:#0e1530;border:1px solid #26345f;border-radius:8px;color:var(--text)}
+    input::file-selector-button{background:#223061;color:var(--text);border:none;padding:6px 10px;border-radius:6px;margin-right:10px;cursor:pointer}
+    .btn{display:inline-flex;gap:6px;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 14px;cursor:pointer;font-weight:600;text-decoration:none}
+    pre{background:#0a0f25;color:#c6f7d0;padding:12px;height:220px;overflow:auto;border-radius:10px;border:1px solid #1a2a55}
+    img.preview{max-width:100%;border-radius:8px;border:1px solid #1a2a55;background:#0a0f25}
+  </style>
+  <script>
+    let apiBase = '/api';
+    let currentJob = null;
+    let rtTimer = null;
+
+    function setApiBase() {
+      const el = document.getElementById('apiBase');
+      if (el && el.value.trim()) apiBase = el.value.trim().replace(/\/$/, '');
+      document.getElementById('apiEcho').textContent = apiBase;
+    }
+
+    async function startInference(ev){
+      ev.preventDefault();
+      clearInterval(rtTimer); rtTimer=null;
+      document.getElementById('preview').src = '';
+      const f = new FormData(document.getElementById('inferForm'));
+      setApiBase();
+      const resp = await fetch(apiBase + '/infer', { method:'POST', body:f });
+      if (!resp.ok){ alert(await resp.text()); return; }
+      const j = await resp.json();
+      currentJob = j.job_id; document.getElementById('job').textContent=currentJob;
+      poll();
+    }
+
+    async function poll(){
+      if (!currentJob) return;
+      setApiBase();
+      const s = await fetch(apiBase + '/status/' + currentJob);
+      if (!s.ok) return;
+      const js = await s.json();
+      document.getElementById('status').textContent = js.status;
+      document.getElementById('message').textContent = js.message||'';
+      if (js.status === 'completed'){
+        // For image or rendered video, show/download result
+        const mode = document.getElementById('mode').value;
+        if (mode === 'image'){
+          document.getElementById('preview').src = apiBase + '/result/' + currentJob + '?t=' + Date.now();
+        } else if (mode === 'video-render'){
+          const a = document.getElementById('download');
+          a.style.display='inline-flex';
+          a.href = apiBase + '/result/' + currentJob;
+        }
+      } else if (js.status === 'running'){
+        // Realtime preview
+        const mode = document.getElementById('mode').value;
+        if (mode === 'video-realtime' && !rtTimer){
+          rtTimer = setInterval(()=>{
+            document.getElementById('preview').src = apiBase + '/rt/' + currentJob + '/frame.jpg?t=' + Date.now();
+          }, 1000);
+        }
+        setTimeout(poll, 1500);
+        return;
+      }
+      setTimeout(poll, 1500);
+    }
+  </script>
+</head>
+<body>
+  <header><h1>Inference YOLO / DETR</h1></header>
+  <main>
+    <div class="grid">
+      <div class="card">
+        <form id="inferForm" onsubmit="startInference(event)">
+          <div class="row">
+            <label>API Base URL</label>
+            <input id="apiBase" placeholder="/api" oninput="setApiBase()" />
+          </div>
+          <small>Utilisé: <code id="apiEcho">/api</code></small>
+          <div class="row" style="margin-top:10px;">
+            <label>Type de modèle</label>
+            <select name="model_type" required>
+              <option value="yolo">YOLO</option>
+              <option value="detr">DETR</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>Mode</label>
+            <select name="mode" id="mode" required>
+              <option value="image">Image</option>
+              <option value="video-render">Vidéo (rendu)</option>
+              <option value="video-realtime">Vidéo (temps réel)</option>
+            </select>
+          </div>
+          <div class="row"><label>Seuil</label><input type="number" name="threshold" value="0.5" step="0.01"></div>
+          <div class="row"><label>FPS (stride)</label><input type="number" name="fps" value="1" min="1"></div>
+          <div class="row"><label>Poids</label><input type="file" name="weights" required /></div>
+          <div class="row"><label>Source</label><input type="file" name="source" required /></div>
+          <div class="row"><button class="btn" type="submit">Lancer</button> <a id="download" class="btn" style="display:none">Télécharger le résultat</a></div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="row"><label>Job</label><div id="job">-</div></div>
+        <div class="row"><label>Status</label><div id="status">-</div></div>
+        <div class="row"><label>Message</label><div id="message">-</div></div>
+        <img id="preview" class="preview" />
+      </div>
+    </div>
+  </main>
+</body>
+</html>
+

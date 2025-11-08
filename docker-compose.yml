@@ -1,0 +1,70 @@
+services:
+  hack-train:
+    build: .
+    container_name: hack_train
+    ports:
+      - "8000:8000"
+    shm_size: "2gb"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - YOLO_DEVICE=0
+      - DETR_DEVICE=cuda
+      - YOLO_WORKERS=2
+      - DATA_DIR=/app/data
+      - MODELS_DIR=/app/data/models
+      - TORCH_HOME=/app/data/torch
+      - HF_HOME=/app/data/hf
+      - TRANSFORMERS_CACHE=/app/data/hf/transformers
+      - HUGGINGFACE_HUB_CACHE=/app/data/hf/hub
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    # Compose v1.28+ supports this shortcut; ignored if unsupported
+    gpus: all
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: hack_web
+    depends_on:
+      - hack-train
+    ports:
+      - "8080:80"
+
+  infer-api:
+    build:
+      context: .
+      dockerfile: infer/Dockerfile
+    container_name: hack_infer
+    ports:
+      - "8001:8001"
+    shm_size: "2gb"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - TORCH_HOME=/app/data/torch
+      - HF_HOME=/app/data/hf
+      - TRANSFORMERS_CACHE=/app/data/hf/transformers
+      - HUGGINGFACE_HUB_CACHE=/app/data/hf/hub
+    volumes:
+      - ./data_infer:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    gpus: all
+
+  infer-web:
+    build:
+      context: .
+      dockerfile: infer/web/Dockerfile
+    container_name: hack_infer_web
+    depends_on:
+      - infer-api
+    ports:
+      - "8081:80"
